@@ -506,8 +506,8 @@ function onSelect(): void {
   // Re-fit shadow camera + light targets to the new product position
   setupStudioLighting(new THREE.Box3().setFromObject(productModel));
   reticle.visible = false;
+  console.log(placed ? "Product repositioned in AR" : "Product placed in AR");
   placed = true;
-  console.log("Product placed in AR");
 }
 
 function onSessionEnded(): void {
@@ -555,16 +555,16 @@ function onXRFrame(time: number, frame: XRFrame): void {
 
   if (hitTestSource === null || xrRefSpace === null) return;
 
+  // Track the most recent valid hit every frame — both before and after
+  // placement, so the reticle always marks the next possible placement
+  // position (first tap = place, later taps = reposition).
   const results = frame.getHitTestResults(hitTestSource);
-  if (results.length > 0 && !placed) {
+  if (results.length > 0) {
     const pose = results[0].getPose(xrRefSpace);
     if (pose) {
       reticleMatrix.fromArray(pose.transform.matrix);
       reticle.matrix.copy(reticleMatrix);
-
-      if (!placed) {
-        reticle.visible = true;
-      }
+      reticle.visible = true;
     }
   } else {
     reticle.visible = false;
