@@ -298,6 +298,18 @@ console.log(
   `[AR-DIAG] 4. AR button created: in DOM=${document.getElementById("ar-button") !== null}, parent=${arButton.parentElement?.tagName}, initial style.display="${arButton.style.display}"`
 );
 
+// Dedicated AR DOM overlay containing the "Exit AR" button (top-right).
+// This container is the dom-overlay root: only its contents are visible
+// and interactive inside an immersive-ar session.
+const arOverlay = document.createElement("div");
+arOverlay.id = "ar-overlay";
+arOverlay.style.display = "none";
+const arExitButton = document.createElement("button");
+arExitButton.id = "ar-exit-button";
+arExitButton.textContent = "Exit AR";
+arOverlay.appendChild(arExitButton);
+document.body.appendChild(arOverlay);
+
 // Reticle: lightweight ring that marks the detected placement surface.
 // matrixAutoUpdate = false because its pose is set directly from the hit-test.
 const reticle = new THREE.Mesh(
@@ -327,9 +339,9 @@ let arSupported = false;
 
 function updateArButton(): void {
   if (xrSession !== null) {
-    // Active AR session — button becomes the exit control
-    arButton.style.display = "block";
-    arButton.textContent = "Exit AR";
+    // Active AR session — the bottom AR button is hidden; exiting is done
+    // via the dedicated "Exit AR" button in the AR DOM overlay.
+    arButton.style.display = "none";
   } else {
     arButton.style.display = arSupported && productModel !== null ? "block" : "none";
     arButton.textContent = "AR";
@@ -373,21 +385,28 @@ if (navigator.xr) {
   );
 }
 
-// Prevent taps on the AR button from also triggering a session "select"
+// Prevent taps on overlay buttons from also triggering a session "select"
 // (which would place the product) while the DOM overlay is active.
 arButton.addEventListener("beforexrselect", (event) => {
   event.preventDefault();
 });
+arOverlay.addEventListener("beforexrselect", (event) => {
+  event.preventDefault();
+});
 
-// Start / exit AR --------------------------------------------------------------
+// Exit AR — dedicated handler on the overlay's Exit button ONLY.
+// The XR "select" event is never used for exiting.
+arExitButton.addEventListener("click", () => {
+  if (xrSession === null) return;
+  xrSession.end().catch((error) => {
+    console.error("Failed to end AR session:", error);
+  });
+});
+
+// Start AR — the bottom button's only job is entering the session.
+// Exiting is done ONLY via the dedicated Exit AR button in the overlay.
 arButton.addEventListener("click", () => {
-  if (xrSession !== null) {
-    // Active session — this click exits AR cleanly
-    xrSession.end().catch((error) => {
-      console.error("Failed to end AR session:", error);
-    });
-    return;
-  }
+  if (xrSession !== null) return; // already in AR
 
   if (!navigator.xr) {
     alert("WebXR is not available in this browser.");
@@ -398,7 +417,7 @@ arButton.addEventListener("click", () => {
     .requestSession("immersive-ar", {
       requiredFeatures: ["hit-test", "local-floor"],
       optionalFeatures: ["dom-overlay"],
-      domOverlay: { root: arButton },
+      domOverlay: { root: arOverlay },
     })
     .then(onSessionStarted)
     .catch((error) => {
@@ -412,6 +431,15 @@ async function onSessionStarted(session: XRSession): Promise<void> {
   xrSession = session;
   placed = false;
   reticle.visible = false;
+
+  // The product must NOT appear until the user places it: hide it for the
+  // whole session (shown again in onSelect / on session end).
+  if (productModel) {
+    productModel.visible = false;
+  }
+
+  // Show the AR DOM overlay (Exit AR button) for the session duration
+  arOverlay.style.display = "block";
   updateArButton();
 
   // Save desktop camera state (XR overwrites position/quaternion/fov/projection)
@@ -484,6 +512,7 @@ function onSelect(): void {
   productModel.position.copy(placedPosition);
   productModel.up.set(0, 1, 0);
   productModel.lookAt(placedPosition.clone().add(forward));
+  productModel.visible = true; // reveal the (already placed) product
   productModel.updateMatrixWorld(true);
 
   // Push the model out along the surface normal so its back rests flush on
@@ -505,7 +534,6 @@ function onSelect(): void {
 
   // Re-fit shadow camera + light targets to the new product position
   setupStudioLighting(new THREE.Box3().setFromObject(productModel));
-  reticle.visible = false;
   console.log(placed ? "Product repositioned in AR" : "Product placed in AR");
   placed = true;
 }
@@ -523,7 +551,15 @@ function onSessionEnded(): void {
   xrRefSpace = null;
   reticle.visible = false;
   placed = false;
+
+  // Hide the AR overlay (Exit AR button) and restore the desktop AR button
+  arOverlay.style.display = "none";
   updateArButton();
+
+  // Restore the product's visibility for the normal desktop viewer
+  if (productModel) {
+    productModel.visible = true;
+  }
 
   // Restore desktop viewer state
   scene.background = savedBackground;
