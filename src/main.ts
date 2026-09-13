@@ -328,11 +328,16 @@ let placed = false; // product placed during this AR session?
 const reticleMatrix = new THREE.Matrix4();
 const placedPosition = new THREE.Vector3();
 
+// AR product transformation factors (AR-only; desktop scale is untouched)
+const AR_SCALE_FACTOR = 0.1; // AR product is 1/10 of its previous AR size
+const AR_Y_ROTATION = Math.PI / 2; // +90° counter-clockwise around the up axis
+
 // Saved desktop state, restored when the AR session ends.
 const savedCamPos = new THREE.Vector3();
 const savedCamQuat = new THREE.Quaternion();
 let savedCamFov = camera.fov;
 let savedBackground: THREE.Color | THREE.Texture | null = scene.background;
+const savedModelScale = new THREE.Vector3(1, 1, 1); // desktop scale restore
 
 // AR availability + button visibility ----------------------------------------
 let arSupported = false;
@@ -436,6 +441,12 @@ async function onSessionStarted(session: XRSession): Promise<void> {
   // whole session (shown again in onSelect / on session end).
   if (productModel) {
     productModel.visible = false;
+
+    // Apply the AR-only scale factor once per session (saved for restore on
+    // exit) so it never compounds across reposition taps or sessions.
+    savedModelScale.copy(productModel.scale);
+    productModel.scale.multiplyScalar(AR_SCALE_FACTOR);
+    productModel.updateMatrixWorld(true);
   }
 
   // Show the AR DOM overlay (Exit AR button) for the session duration
@@ -512,6 +523,17 @@ function onSelect(): void {
   productModel.position.copy(placedPosition);
   productModel.up.set(0, 1, 0);
   productModel.lookAt(placedPosition.clone().add(forward));
+
+  // Additional AR-only +90° counter-clockwise yaw around the model's up
+  // (vertical Y) axis. Applied AFTER the wall-facing orientation above, as
+  // a premultiplied local rotation, so it integrates with the wall-facing
+  // direction instead of replacing it — the model stays upright and flush.
+  const yawOffset = new THREE.Quaternion().setFromAxisAngle(
+    productModel.up,
+    AR_Y_ROTATION
+  );
+  productModel.quaternion.premultiply(yawOffset);
+
   productModel.visible = true; // reveal the (already placed) product
   productModel.updateMatrixWorld(true);
 
@@ -556,9 +578,13 @@ function onSessionEnded(): void {
   arOverlay.style.display = "none";
   updateArButton();
 
-  // Restore the product's visibility for the normal desktop viewer
+  // Restore the product's visibility and DESKTOP scale for the normal
+  // viewer — done before the light/framing refit below so it is computed
+  // with the original scale.
   if (productModel) {
     productModel.visible = true;
+    productModel.scale.copy(savedModelScale);
+    productModel.updateMatrixWorld(true);
   }
 
   // Restore desktop viewer state
